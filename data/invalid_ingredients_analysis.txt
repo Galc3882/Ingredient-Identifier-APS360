@@ -1,0 +1,56 @@
+
+### Invalid Ingredients Analysis
+- The most common words in invalid ingredients include measurements and generic terms like `-`, `1`, `half`, `and`, `2`, `all-purpose`, `flour`, etc. This suggests that many invalid ingredients might be improperly formatted or include non-ingredient descriptors like quantities and types of ingredients (e.g., "all-purpose flour").
+- **Top Words:** The top words in invalid ingredients, aside from numbers and common terms like "and" or "half," are related to measurements (`cup`, `teaspoon`) and generic ingredients (`flour`, `spice`, `powder`), indicating that part of the invalid ingredients might be due to including measurements or non-specific terms within the ingredient list.
+- The list of the 50 most occuring ingredents out of those is below. These occur less then 30 times so they can be neglected.
+
+Pillsbury refrigerated breadsticks
+Refrigerated parmesan breadsticks
+Lactobacillus acidophilus culture
+Unsweetened strawberry preserves
+Refrigerated buttermilk biscuits
+Frozen unsweetened strawberries
+Refrigerated garlic breadsticks
+Frozen unsweetened blackberries
+Refrigerated buttermilk biscuit
+Pillsbury refrigerated biscuits
+Desiccated unsweetened coconut
+PHILADELPHIA Neufchatel Cheese
+Frozen unsweetened raspberries
+Worthington multigrain cutlets
+Raspberry vinaigrette dressing
+Unsweetened frozen blueberries
+Carnation Breakfast Essentials
+Imported bittersweet chocolate
+Refrigerated cheese tortellini
+Vanilla raspberry marshmallows
+Colored miniature marshmallows
+Pillsbury refrigerated biscuit
+Refrigerated butterflake rolls
+Bittersweet chocolate glacing
+Unsweetened dried cranberries
+Bittersweet chocolate squares
+Frozen sweetened strawberries
+Refrigerated breadstick dough
+Unsweetened pomegranate juice
+Unsweetened chocolate squares
+Imitation chocolate flavoring
+Hickory smoked worcestershire
+Szechwan preserved vegetables
+Multicolored sugar nonpareils
+Crushed unsweetened pineapple
+Vegetarian chicken substitute
+Unsweetened pineapple tidbits
+Parmesan flavored breadcrumbs
+Seedless blackberry preserves
+Braunschweiger liver sausage
+Strawberry licorice bootlace
+Frozen concentrated lemonade
+Pomeroon cassareep seasoning
+Bottled vinaigrette dressing
+Frozen raspberry concentrate
+Vegetarian hamburger patties
+Pomegranate blueberry sorbet
+Southwest chipotle seasoning
+Bittersweet chocolate pieces
+Seedless raspberry preserves

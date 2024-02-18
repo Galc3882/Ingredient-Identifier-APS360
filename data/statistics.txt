@@ -1,0 +1,7 @@
+Number of valid ingredients: 1027
+Number of recipes: 1029720
+Number of invalid ingredients turned into valid ingredients: 1324334
+Number of invalid ingredients removed: 252376
+Number of recipes removed: 554529
+Number of recipes kept: 475191
+Number of whitespace invalid ingredients: 767
