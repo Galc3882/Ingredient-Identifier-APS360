@@ -58,26 +58,34 @@ from torchvision import transforms
 import random
 from tqdm import tqdm
 from multiprocessing.pool import ThreadPool
+import tarfile
+import io
 
 
 class Recipe1MPlusDataset(torch.utils.data.Dataset):
     '''special dataloader for Recipe1M+ dataset.'''
 
-    def __init__(self, data, ingrs, img_size, transform=None):
+    def __init__(self, data, ingrs, index, data_path, img_size, transform=None, web=False):
         self.data = data
         self.classes = ingrs
         self.num_ingrs = len(ingrs)
         self.transform = transform
         self.img_size = img_size
+        self.use_web = web
+        self.data_path = data_path
+        self.index = index
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
         # Load the image if path exists
-        path = self.get_path(idx)
-
-        img = self.load_image(path)
+        if self.use_web:
+            path = self.get_path_web(idx)
+            img = self.load_image_web(path)
+        else:
+            path = self.get_path(idx)
+            img = self.load_image(path)
 
         # Create one-hot encoded vector for the label
         label = self.get_label(idx)
@@ -86,21 +94,53 @@ class Recipe1MPlusDataset(torch.utils.data.Dataset):
 
     def __getitems__(self, idxs):
         '''Use ThreadPool to load images in parallel.'''
-        paths = [self.get_path(idx) for idx in idxs]
-
-        with ThreadPool(8) as p:
-            images = p.map(self.load_image, paths)
-
-        labels = [self.get_label(idx) for idx in idxs]
+        if self.use_web:
+            paths = [self.get_path_web(idx) for idx in idxs]
+            with ThreadPool(32) as p:
+                images = p.map(self.load_image_web, paths)
+                labels = p.map(self.get_label, idxs)
+        else:
+            paths = [self.get_path(idx) for idx in idxs]
+            with ThreadPool(32) as p:
+                images = p.map(self.load_image, paths)
+                labels = p.map(self.get_label, idxs)
 
         # Zip the images and labels
         return list(zip(images, labels))
 
     def get_path(self, idx):
         '''Get the path for the given index.'''
+        return self.data[idx][0]
+
+    def load_image(self, image_name):
+        '''Load image from tar file using the index.'''
+        # Load image from tar file
+        with tarfile.open(f"{self.data_path}\\recipe1M+_{image_name[0]}.tar", 'r') as tar:
+            info = self.index[image_name]
+
+            # Seek directly to the start of the file data
+            tar.fileobj.seek(info[0])
+
+            # Read the file data
+            file_obj = tar.fileobj.read(info[1])
+            if file_obj:
+                # Open the image
+                img = Image.open(io.BytesIO(file_obj)).convert('RGB')
+            else:
+                print(f"Image {image_name} does not exist.")
+                return None
+
+        # Apply the transform
+        if self.transform:
+            img = self.transform(img)
+
+        return img
+
+    def get_path_web(self, idx):
+        '''Get the path for the given index.'''
         return f"http://wednesday.csail.mit.edu/temporal/release/recipe1M+_images/{'/'.join(self.data[idx][0][:4])}/{self.data[idx][0]}"
 
-    def load_image(self, path):
+    def load_image_web(self, path):
         '''Load image from path.'''
         image = urllib.request.urlopen(path)
 
@@ -132,7 +172,7 @@ def preprocess_images(images):
     return images
 
 
-def load_data():
+def load_data(dataset_files, data_path):
     """Load the data from the JSON files."""
     # Create a dictionary to store the data
     data = {'train': [], 'val': [], 'test': []}
@@ -173,10 +213,25 @@ def load_data():
 
                 # Save the data
                 for image in recipe['images']:
-                    data[layer1[i]['partition']].append((image['id'], ingrs_vector))
+                    # If the image is in the tar files
+                    if image['id'][0] in dataset_files:
+                        data[layer1[i]['partition']].append((image['id'], ingrs_vector))
                 i += 1
 
-    return data, ingrs
+    print('Loading tar indecies...')
+    # Load the tar indecies
+    index = {}
+    for file in tqdm(dataset_files):
+        with tarfile.open(f"{data_path}\\recipe1M+_{file}.tar", 'r') as tar:
+            # Build the index
+            for member in tar.getmembers():
+                if member.isfile():
+                    # Split the path and check if it's 4 folders deep (5 parts including the filename)
+                    parts = member.name.split('/')
+                    if len(parts) == 5:
+                        index[parts[-1]] = (member.offset_data, member.size)
+
+    return data, ingrs, index
 
 
 def transform(img_size):
@@ -195,44 +250,66 @@ def augment_transform():
     """Transform images with data augmentation."""
     # TODO: Tweak the parameters for data augmentation
     return transforms.Compose([
-        transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.15),
-        transforms.RandomRotation(random.randint(0, 360)),
-        transforms.RandomErasing(p=0.9, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False),
+        transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.01),
+        transforms.RandomRotation(random.randint(0, 10)),
+        # transforms.RandomErasing(p=0.9, scale=(0.02, 0.33), ratio=(0.3, 3.3), value=0, inplace=False),
         # Add random noise
-        transforms.Lambda(lambda x: torch.clamp(x + 0.03 * torch.randn_like(x), 0, 1)),
+        transforms.Lambda(lambda x: torch.clamp(x + 0.01 * torch.randn_like(x), 0, 1)),
     ])
 
 
-def create_dataset():
+def create_dataset(dataset_files, data_path):
     """Create dataset train/validation/test split as DataLoader."""
 
     # Load the data
     print('Reading the data...')
-    data, ingrs = load_data()
+    data, ingrs, index = load_data(dataset_files, data_path)
 
     # pickle the data
     with open('data/data.pkl', 'wb') as f:
         print('Pickling the data...')
-        pickle.dump((data, ingrs), f)
+        pickle.dump((data, ingrs, index), f)
 
-    return data, ingrs
+    return data, ingrs, index
 
 
 def load_dataset(img_size):
     """Load the dataset from the pickle file."""
+    # Path to folder of tars
+    data_path = "D:"
+
     # If the pickle file exists, load the data from the file
     if os.path.exists('data/data.pkl'):
         print('Loading the data from the pickle file...')
         with open('data/data.pkl', 'rb') as f:
-            data, ingrs = pickle.load(f)
+            data, ingrs, index = pickle.load(f)
     else:
+        print('Creating the dataset...')
+
+        # List of dataset files
+        dataset_files = ['0', '1', '2']
+        # dataset_files = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
+
         # Create the dataset
-        data, ingrs = create_dataset()
-
-     # Create dataset
+        data, ingrs, index = create_dataset(dataset_files, data_path)
+        
+    # count ouccurences of each ingredient in dataset
+    ingrs_count = {}
+    for dataset in [data['train'], data['val']]:
+        for recipe in dataset:
+            for ingr in recipe[1]:
+                if int(ingr) in ingrs_count:
+                    ingrs_count[int(ingr)] += 1
+                else:
+                    ingrs_count[int(ingr)] = 1
+    # Weight for the loss function (inverse of the frequency of the ingredient)
+    weights = torch.tensor([1/ingrs_count[i] for i in range(len(ingrs_count))]) * max(ingrs_count.values())
+    print('sorted ingredients by count:', sorted(ingrs_count.items(), key=lambda x: x[1], reverse=True))
+    
+    # Create dataset
     print('Creating dataset classes...')
-    train_data = Recipe1MPlusDataset(data['train'], ingrs, img_size, transform=transforms.Compose([transform(img_size), augment_transform()]))
-    val_data = Recipe1MPlusDataset(data['val'], ingrs, img_size, transform=transform(img_size))
-    test_data = Recipe1MPlusDataset(data['test'], ingrs, img_size, transform=transform(img_size))
+    train_data = Recipe1MPlusDataset(data['train'], ingrs, index, data_path, img_size, transform=transforms.Compose([transform(img_size), augment_transform()]))
+    val_data = Recipe1MPlusDataset(data['val'], ingrs, index, data_path, img_size, transform=transform(img_size))
+    test_data = Recipe1MPlusDataset(data['test'], ingrs, index, data_path, img_size, transform=transform(img_size))
 
-    return train_data, val_data, test_data
+    return train_data, val_data, test_data, weights

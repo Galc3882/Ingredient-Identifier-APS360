@@ -53,12 +53,13 @@
 
 
 import json
+import os
 import ijson
 from tqdm import tqdm
 import re
 
 
-def process_recipes(input_file, output_file, layer1_file, layer2_file, num_words_threshold, count_threshold, num_ingrs_per_recipe, num_images_threshold):
+def process_recipes(input_file, output_file, layer1_file, layer2_file, dataset_files, num_words_threshold, count_threshold, num_ingrs_per_recipe, num_images_threshold):
     '''Process recipes and remove invalid ingredients.'''
     # Initialize statistics
     stats = {
@@ -73,18 +74,60 @@ def process_recipes(input_file, output_file, layer1_file, layer2_file, num_words
     stats['num_recipes'] = get_num_recipes(input_file)
 
     # Remove based on number of pictures
-    low_image_recipes = process_recipe_images(layer2_file, stats['num_recipes'], num_images_threshold)
+    low_image_recipes = process_recipe_images(layer2_file, dataset_files, stats['num_recipes'], num_images_threshold)
 
     # Process valid ingredients by adding them to a set
     valid_ingredients, low_count_ingredients = process_valid_ingredients(
         input_file, stats['num_recipes'], low_image_recipes, num_words_threshold, count_threshold, num_ingrs_per_recipe)
 
     # Process invalid ingredients and update recipes
-    stats = process_invalid_ingredients(input_file, output_file, valid_ingredients, stats, layer1_file,
-                                        low_image_recipes, low_count_ingredients, num_words_threshold, num_ingrs_per_recipe)
+    stats, ingredient_count = process_invalid_ingredients(input_file, output_file, valid_ingredients, stats, layer1_file,
+                                                          low_image_recipes, low_count_ingredients, num_words_threshold, num_ingrs_per_recipe)
+
+    # Remove low count ingredients
+    stats, ingredient_count = remove_low_count_ingredients(output_file, stats, ingredient_count, count_threshold, num_ingrs_per_recipe)
 
     # Write statistics to files
-    write_statistics(stats, valid_ingredients)
+    write_statistics(stats, sorted(ingredient_count.keys(), key=lambda x: ingredient_count[x], reverse=True))
+
+
+def remove_low_count_ingredients(output_file, stats, ingredient_count, count_threshold, num_ingrs_per_recipe):
+    '''Remove whole recipe from output file if there is at least one low count ingredient and update statistics.'''
+    print("Removing low count ingredients")
+    recipes_to_remove = []
+    with open(output_file.split('/')[0] + '/temp_' + output_file.split('/')[1], 'r') as f:
+        recipes = ijson.items(f, 'item')
+        for recipe in tqdm(recipes, total=stats['num_recipes'] - len(stats['recipes_removed'])):
+            remove_recipe = False
+            for ingredient in recipe['ingredients']:
+                if ingredient['text'] in ingredient_count and ingredient_count[ingredient['text']] <= count_threshold:
+                    ingredient_count[ingredient['text']] -= 1
+                    if not remove_recipe:
+                        stats['recipes_removed'].append(recipe['id'])
+                        recipes_to_remove.append(recipe['id'])
+                    remove_recipe = True
+    
+    # Remove all ingredients with 0 count from ingredient_count
+    for ingredient in list(ingredient_count.keys()):
+        if ingredient_count[ingredient] == 0:
+            ingredient_count.pop(ingredient)
+
+    # Remove recipes from output file
+    with open(output_file.split('/')[0] + '/temp_' + output_file.split('/')[1], 'r') as f, open(output_file, 'w') as out_f:
+        recipes = ijson.items(f, 'item')
+        out_f.write('[')
+        first_recipe = True
+        for recipe in recipes:
+            if recipe['id'] not in recipes_to_remove and len(recipe['ingredients']) >= num_ingrs_per_recipe:
+                if not first_recipe:
+                    out_f.write(',')
+                json.dump(recipe, out_f)
+                first_recipe = False
+        out_f.write(']')
+
+    # Remove temp file
+    os.remove(output_file.split('/')[0] + '/temp_' + output_file.split('/')[1])
+    return stats, ingredient_count
 
 
 def get_num_recipes(input_file):
@@ -105,14 +148,14 @@ def get_partitions(layer1_file, num_recipes):
     return layer1_dict
 
 
-def process_recipe_images(layer2_file, num_recipes, num_images_threshold):
+def process_recipe_images(layer2_file, dataset_files, num_recipes, num_images_threshold):
     '''Process recipes and remove invalid ingredients.'''
     print("Processing recipe images")
 
     low_image_recipes = set()
     with open(layer2_file, 'rb') as f:
         for recipe in tqdm(ijson.items(f, 'item'), total=num_recipes):
-            if len(recipe['images']) < num_images_threshold:
+            if len(recipe['images']) <= num_images_threshold or sum([1 if any([img_path[:1] in dataset_files for img_path in recipe['images'][i]['id']]) else 0 for i in range(len(recipe['images']))]) <= num_images_threshold:
                 low_image_recipes.add(recipe['id'])
 
     return low_image_recipes
@@ -128,7 +171,7 @@ def process_valid_ingredients(input_file, num_recipes, low_image_recipes, num_wo
         recipes = ijson.items(f, 'item')
         for recipe in tqdm(recipes, total=num_recipes):
             if recipe['id'] not in low_image_recipes:
-                if len(recipe['ingredients']) >= num_ingrs_per_recipe:
+                if sum(recipe['valid']) >= num_ingrs_per_recipe:
                     for i, ingredient in enumerate(recipe['ingredients']):
                         if recipe['valid'][i] and ingredient['text'] != "" and len(ingredient['text'].split(" ")) <= num_words_threshold:
                             # Count unique ingredients and frequency
@@ -138,15 +181,25 @@ def process_valid_ingredients(input_file, num_recipes, low_image_recipes, num_wo
                             else:
                                 counts[ingredient['text']] += 1
 
-    # Reduce ingredients based on occurrences
-    freq = sorted(counts.items(), key=lambda x: x[1])
-    # Remove ingredients where freq is below count_threshold
+    # Merge ingredients with similar names if they are a substring of each other
     low_count_ingredients = set()
+    for ingredient in valid_ingredients:
+        if ingredient not in low_count_ingredients:
+            for other_ingredient in valid_ingredients:
+                if other_ingredient not in low_count_ingredients:
+                    if ingredient != other_ingredient and ingredient in other_ingredient and abs(len(ingredient) - len(other_ingredient)) <= 3:
+                        counts[ingredient] += counts[other_ingredient]
+                        counts.pop(other_ingredient)
+                        low_count_ingredients.add(other_ingredient)
+
+    # Reduce ingredients based on occurrences
+    freq = sorted(counts.items(), key=lambda x: x[1], reverse=True)
+    # Remove ingredients where freq is below count_threshold
+    valid_ingredients = set()
     for i in range(len(freq)):
         if freq[i][1] >= count_threshold:
-            break
+            valid_ingredients.add(freq[i][0])
         else:
-            valid_ingredients.remove(freq[i][0])
             low_count_ingredients.add(freq[i][0])
 
     return valid_ingredients, low_count_ingredients
@@ -160,9 +213,12 @@ def process_invalid_ingredients(input_file, output_file, valid_ingredients, stat
     # Preprocess valid ingredients for faster processing
     preprocessed_valid_ingredients = {vi: set(vi.lower().split(" ")) for vi in valid_ingredients if vi}
 
+    # Count number of times each ingredient is in a recipe
+    ingredient_count = {vi: 0 for vi in valid_ingredients}
+
     # Process invalid ingredients and update recipes
     print("Processing invalid ingredients")
-    with open(input_file, 'r') as f, open(output_file, 'w') as out_f:
+    with open(input_file, 'r') as f, open(output_file.split('/')[0] + '/temp_' + output_file.split('/')[1], 'w') as out_f:
         recipes = ijson.items(f, 'item')
         out_f.write('[')
         first_recipe = True
@@ -172,7 +228,7 @@ def process_invalid_ingredients(input_file, output_file, valid_ingredients, stat
             valid_ingredients_in_recipe = set()
 
             # Skip recipes with too few images
-            if recipe['id'] in low_image_recipes or len(recipe['ingredients']) <= num_ingrs_per_recipe:
+            if recipe['id'] in low_image_recipes or sum(recipe['valid']) < num_ingrs_per_recipe:
                 stats['recipes_removed'].append(recipe['id'])
                 continue
 
@@ -216,15 +272,19 @@ def process_invalid_ingredients(input_file, output_file, valid_ingredients, stat
             # Remove valid field
             recipe.pop('valid')
             # Remove recipes with too few ingredients, even if they are all valid
-            if valid_ingredients_in_recipe and len(valid_ingredients_in_recipe) > 5:
+            if valid_ingredients_in_recipe and len(valid_ingredients_in_recipe) >= num_ingrs_per_recipe:
                 if not first_recipe:
                     out_f.write(',')
                 json.dump(recipe, out_f)
                 first_recipe = False
+
+                # Update ingredient count
+                for vi in valid_ingredients_in_recipe:
+                    ingredient_count[vi] += 1
             else:
                 stats['recipes_removed'].append(recipe['id'])
         out_f.write(']')
-    return stats
+    return stats, ingredient_count
 
 
 def write_statistics(stats, valid_ingredients):
@@ -281,9 +341,20 @@ def write_statistics(stats, valid_ingredients):
 
 
 if __name__ == "__main__":
-    num_words_threshold = 2
-    count_threshold = 600
-    num_images_threshold = 4
-    num_ingrs_per_recipe = 5
+    # Set hyperparameters
+
+    # List of dataset files
+    dataset_files = ['0', '1', '2']
+    # dataset_files = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f']
+
+    # The maximum number of words an ingredient can have to be considered valid
+    num_words_threshold = 1  # 2
+    # The number of times an ingredient must appear in the recipes to be considered valid
+    count_threshold = 1200  # 600
+    # The number of images a recipe must have to be considered valid
+    num_images_threshold = 2  # 4
+    # The number of ingredients a recipe must have to be considered valid
+    num_ingrs_per_recipe = 10  # 5
+
     process_recipes('data/det_ingrs.json', 'data/det_ingrs_processed.json', 'data/layer1.json',
-                    'data/layer2+.json', num_words_threshold, count_threshold, num_images_threshold, num_ingrs_per_recipe)
+                    'data/layer2+.json', dataset_files, num_words_threshold, count_threshold, num_images_threshold, num_ingrs_per_recipe)
