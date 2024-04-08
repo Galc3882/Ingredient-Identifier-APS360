@@ -69,21 +69,36 @@ class ZLPRLoss(nn.Module):
         return loss.mean()
 
 
-class DNN(nn.Module):
-    def __init__(self, num_classes, model_name):
-        super().__init__()
-        self.model = timm.create_model(model_name, pretrained=True, num_classes=num_classes)
-
-        # # Initialize weights in the custom head using He initialization
-        # for m in self.model.head.modules():
-        #     if isinstance(m, nn.Linear):
-        #         nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')  # Mish is similar to ReLU
-        #         if m.bias is not None:
-        #             nn.init.constant_(m.bias, 0)
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        # Convolutional Layer 1
+        self.conv1 = nn.Conv2d(in_channels=3, out_channels=9, kernel_size=3, padding=1)
+        # Max Pooling Layer 1
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        # Convolutional Layer 2
+        self.conv2 = nn.Conv2d(in_channels=9, out_channels=18, kernel_size=3, padding=1)
+        # Convolutional Layer 3
+        self.conv3 = nn.Conv2d(in_channels=18, out_channels=36, kernel_size=3, padding=1)
+        # Fully Connected Layer 1
+        self.fc1 = nn.Linear(36 * 7 * 7, 1764)
+        # Fully Connected Layer 2
+        self.fc2 = nn.Linear(1764, 34)
 
     def forward(self, x):
-        x = self.model(x)
-        return x  # loss function has sigmoid built-in
+        # Applying conv1 -> relu -> max pooling
+        x = self.pool(F.relu(self.conv1(x)))
+        # Applying conv2 -> relu -> max pooling
+        x = self.pool(F.relu(self.conv2(x)))
+        # Applying conv3 -> relu -> max pooling
+        x = self.pool(F.relu(self.conv3(x)))
+        # Flattening the tensor for the fully connected layer
+        x = x.view(-1, 36 * 7 * 7)
+        # Applying fully connected layer 1 -> relu
+        x = F.relu(self.fc1(x))
+        # Applying fully connected layer 2 -> relu
+        x = F.relu(self.fc2(x))
+        return x
 
 
 def train(model, dataloader, loss_fn, optimizer, device):
@@ -199,17 +214,14 @@ def accuracy_fn(labels, outputs):
 
 if __name__ == "__main__":
     # Set Hyperparameters
-    model_name = 'resnet18.a1_in1k'  # https://github.com/kentaroy47/timm_speed_benchmark
-    # vit_base_patch32_clip_384.openai_ft_in12k_in1k
-    # vit_base_patch32_clip_448.laion2b_ft_in12k_in1k
-    num_epochs = 500
+    num_epochs = 150
     lr = 3e-4
     weight_decay = 1e-5
     step_size = 6
     gamma = 0.55
     batch_size = 64
-    img_size = 384
-    precision_recall = 1  # 3
+    img_size = 224
+    precision_recall = 1
 
     # Set device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -223,7 +235,7 @@ if __name__ == "__main__":
 
     # Define the model, loss function and optimizer
     print("Creating model...")
-    model = DNN(model_name=model_name, num_classes=len(train_loader.dataset.classes)).to(device, non_blocking=True)
+    model = CNN().to(device, non_blocking=True)
     # Set model to train only the head
     for param in model.model.parameters():
         param.requires_grad = True
